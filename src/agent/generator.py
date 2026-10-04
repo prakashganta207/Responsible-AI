@@ -17,7 +17,13 @@ class LocalQwenGenerator:
             
             with tracer.start_as_current_span("prompt.construction") as prompt_span:
                 context_texts = "\n\n".join([c["content"] for c in context])
-                prompt = f"Use the following university context to answer the query.\n\nContext:\n{context_texts}\n\nQuery: {query}\nAnswer:"
+                prompt = (
+                    "Use the following university context to answer the query. Answer only from the context; "
+                    "if the context does not contain the answer, say so instead of guessing.\n"
+                    "For JoSAA cutoff tables: a lower rank number is better, and a student can get a program "
+                    "if their rank is at or below (numerically less than or equal to) its closing rank.\n\n"
+                    f"Context:\n{context_texts}\n\nQuery: {query}\nAnswer:"
+                )
                 prompt_span.set_attribute("prompt_length", len(prompt))
             
             payload = {

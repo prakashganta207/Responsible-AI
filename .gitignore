@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Secrets (DB_PASSWORD, QWEN_MODEL overrides)
+.env
+
+# OS files
+.DS_Store
+**/.DS_Store
+
+# Local backups
+data/vector_store_backup/

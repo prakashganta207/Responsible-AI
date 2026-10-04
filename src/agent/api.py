@@ -10,6 +10,7 @@ from opentelemetry import trace
 
 from src.agent.retriever import FAISSRetriever
 from src.agent.generator import LocalQwenGenerator
+from src.agent.cutoffs import CutoffLookup
 from src.agentops.telemetry import tracer, tracker
 from src.config import AGENTOPS_ENABLED
 
@@ -17,6 +18,7 @@ app = FastAPI(title="AgentOps Admission API")
 
 retriever = FAISSRetriever()
 generator = LocalQwenGenerator()
+cutoffs = CutoffLookup()
 
 class QueryRequest(BaseModel):
     query: str
@@ -47,7 +49,12 @@ async def handle_query(request: QueryRequest):
         try:
             # 1. Retrieve Context
             context = retriever.retrieve(query=request.query, trace_id=trace_id)
-            
+
+            # Rank/cutoff questions also get exact rows from the structured JoSAA table
+            cutoff_context = cutoffs.lookup(request.query)
+            if cutoff_context:
+                context = [cutoff_context] + context
+
             # 2. Prompt Construction is embedded in generator, but we can capture it here virtually or in generator.
             # 3. Generate Answer
             answer = await generator.generate_response(

@@ -3,6 +3,7 @@ Knowledge Base Ingestion Script
 Primary Responsibility: Reads raw markdown, PDF, CSV, and Excel files, chunks them, generates semantic embeddings, and saves them to a FAISS index.
 """
 import os
+import re
 import glob
 from datetime import datetime
 import faiss
@@ -31,6 +32,51 @@ def simple_chunker(text, max_words=100):
             chunks.append(chunk)
     return chunks
 
+def _is_number(v):
+    try:
+        float(str(v).replace(',', ''))
+        return True
+    except ValueError:
+        return False
+
+def table_sheet_to_sentences(df, report_name):
+    """Turns a report-style sheet (title row, header row(s), data rows) into one sentence per data row,
+    so each row carries its table title and column names and can be retrieved on its own."""
+    df = df.dropna(how='all').dropna(axis=1, how='all').reset_index(drop=True)
+    if len(df) < 3:
+        return ""
+    cells = df.astype(object).where(df.notna(), None).values.tolist()
+    title = " ".join(dict.fromkeys(str(c).strip() for c in cells[0] if c is not None))  # merged cells repeat
+    title = re.sub(r'\s+', ' ', title)
+
+    # Header = first row after the title with at least 3 text cells; merge a second text header row if present
+    h = next((i for i in range(1, min(6, len(cells)))
+              if sum(1 for c in cells[i] if c is not None and not _is_number(c)) >= 3), None)
+    if h is None:
+        return ""
+    top, headers = None, []
+    for c in cells[h]:
+        top = str(c).strip() if c is not None else top
+        headers.append(top or "")
+    start = h + 1
+    if start < len(cells) and sum(1 for c in cells[start] if c is not None and not _is_number(c)) >= 2:
+        headers = [f"{t} {s}".strip() if s is not None and not _is_number(s) else t
+                   for t, s in zip(headers, cells[start])]
+        start += 1
+    headers = [re.sub(r'\s+', ' ', x) for x in headers]
+
+    lines = []
+    for row in cells[start:]:
+        if all(c is None or _is_number(c) for c in row):
+            continue  # column-numbering row (1, 2, 3, ...) or blank
+        label = next(str(c).strip() for c in row if c is not None and not _is_number(c))
+        values = [f"{hd}: {round(c, 3) if isinstance(c, float) else c}"
+                  for hd, c in zip(headers, row)
+                  if c is not None and _is_number(c) and hd and not re.match(r'(?i)s\.?\s*no|sl\.?\s*no', hd)]
+        if values:
+            lines.append(f"{report_name} - {title} - {label}: " + "; ".join(values) + ".")
+    return "\n".join(lines)
+
 def extract_text_from_file(file_path):
     ext = os.path.splitext(file_path)[1].lower()
     text = ""
@@ -48,8 +94,18 @@ def extract_text_from_file(file_path):
             df = pd.read_csv(file_path)
             text = df.to_string(index=False)
         elif ext == '.xlsx':
-            df = pd.read_excel(file_path)
-            text = df.to_string(index=False)
+            # Read every sheet (AISHE reports have 60+ tables); one sentence per data row
+            report_name = os.path.splitext(os.path.basename(file_path))[0]
+            sheets = pd.read_excel(file_path, sheet_name=None, header=None)
+            parts = []
+            for sheet_name, df in sheets.items():
+                sentences = table_sheet_to_sentences(df, report_name)
+                if not sentences:
+                    df = df.dropna(how='all').dropna(axis=1, how='all')
+                    if df.empty: continue
+                    sentences = f"[Sheet: {sheet_name}]\n" + df.fillna('').to_string(index=False, header=False)
+                parts.append(sentences)
+            text = "\n\n".join(parts)
     except Exception as e:
         print(f"Error reading {file_path}: {e}")
     return text
